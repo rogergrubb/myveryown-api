@@ -19,7 +19,26 @@ const app = express();
 const PORT = Number(process.env.PORT || 3000);
 
 // ─── Middleware ───
-app.use(cors({ origin: process.env.FRONTEND_URL || true, credentials: true }));
+// CORS — allow production domain + Vercel previews + localhost dev
+const corsAllowlist = [
+  'https://myveryown.page',
+  'https://www.myveryown.page',
+  'http://localhost:5173',     // Vite dev server
+  'http://localhost:4173',     // Vite preview
+];
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests without origin (curl, server-to-server, mobile apps)
+    if (!origin) return callback(null, true);
+    // Allowlisted exact match
+    if (corsAllowlist.includes(origin)) return callback(null, true);
+    // Any Vercel preview for this project (vercel.app domain)
+    if (/^https:\/\/[a-z0-9-]+\.vercel\.app$/i.test(origin)) return callback(null, true);
+    // Reject others
+    return callback(new Error(`Origin ${origin} not allowed by CORS`));
+  },
+  credentials: true,
+}));
 
 // Stripe webhook needs raw body — must come BEFORE express.json()
 app.post('/api/subscribe/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
