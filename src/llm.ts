@@ -53,7 +53,7 @@ async function streamGeminiFlash(
   const estInputTokens = Math.ceil(inputText.length / 4);
 
   let completeText = '';
-  let resolveUsage: (u: { inputTokens: number; outputTokens: number; costMillis: number; model: string }) => void;
+  let resolveUsage!: (u: { inputTokens: number; outputTokens: number; costMillis: number; model: string }) => void;
   const usagePromise = new Promise<{ inputTokens: number; outputTokens: number; costMillis: number; model: string }>(
     res => { resolveUsage = res; }
   );
