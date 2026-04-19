@@ -35,7 +35,7 @@ async function streamGeminiFlash(
   if (!gemini) throw new Error('GEMINI_API_KEY not configured');
 
   const model = gemini.getGenerativeModel({
-    model: 'gemini-2.0-flash',
+    model: 'gemini-2.5-flash',
     systemInstruction: systemPrompt,
   });
 
@@ -79,10 +79,10 @@ async function streamGeminiFlash(
         (inputTokens / 1_000_000) * pricing.input +
         (outputTokens / 1_000_000) * pricing.output
       );
-      resolveUsage({ inputTokens, outputTokens, costMillis, model: 'gemini-2.0-flash' });
+      resolveUsage({ inputTokens, outputTokens, costMillis, model: 'gemini-2.5-flash' });
     } catch (err) {
       console.error('[stream] error', err);
-      resolveUsage({ inputTokens: estInputTokens, outputTokens: 0, costMillis: 0, model: 'gemini-2.0-flash' });
+      resolveUsage({ inputTokens: estInputTokens, outputTokens: 0, costMillis: 0, model: 'gemini-2.5-flash' });
       throw err;
     }
   })();
