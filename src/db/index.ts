@@ -28,13 +28,13 @@ export function initSchema() {
       anonymous_session_id TEXT        -- links to pre-signup session if migrated
     );
 
-    -- Anonymous sessions (the 48hr free trial)
+    -- Anonymous sessions (the 7-day free trial)
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       name TEXT,                       -- what the user told us to call them
       persona TEXT NOT NULL,           -- 'kpop', 'scarlet', etc.
       created_at INTEGER NOT NULL,
-      expires_at INTEGER NOT NULL,     -- created_at + 48hr
+      expires_at INTEGER NOT NULL,     -- created_at + 7 days
       user_id TEXT,                    -- set when they sign up
       message_count INTEGER DEFAULT 0,
       FOREIGN KEY (user_id) REFERENCES users(id)

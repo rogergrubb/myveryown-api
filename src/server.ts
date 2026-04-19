@@ -97,8 +97,15 @@ app.get('/api/personas', (_req, res) => {
 });
 
 // ═══════════════════════════════════════
-// SESSIONS — anonymous 48hr free trials
+// SESSIONS — anonymous 7-day free trials
+//
+// Users land, pick a persona, type their name, and get 7 days of
+// unrestricted access before hitting a paywall. The theory is that
+// someone needs roughly a week of interactions to form a genuine
+// attachment to an AI companion — this is the "fall in love" window.
 // ═══════════════════════════════════════
+const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;   // 7 days
+
 app.post('/api/session', (req, res) => {
   const { name, persona } = req.body || {};
   if (!persona || !getPersona(persona)) {
@@ -106,7 +113,7 @@ app.post('/api/session', (req, res) => {
   }
   const id = `session_${nanoid(20)}`;
   const now = Date.now();
-  const expires = now + 48 * 60 * 60 * 1000;
+  const expires = now + TRIAL_DURATION_MS;
   db.prepare(`
     INSERT INTO sessions (id, name, persona, created_at, expires_at, message_count)
     VALUES (?, ?, ?, ?, ?, 0)
