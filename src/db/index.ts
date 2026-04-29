@@ -75,12 +75,37 @@ export function initSchema() {
       created_at INTEGER NOT NULL
     );
 
+    -- Visit tracking (anonymous traffic logs for /dashboard)
+    -- ip_full kept short-term for ops debugging; ip_hash for long-term aggregation.
+    CREATE TABLE IF NOT EXISTS visits (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ip_full TEXT,                    -- full client IP (best-effort from X-Forwarded-For)
+      ip_hash TEXT NOT NULL,           -- SHA-256 of ip+salt for privacy-safe aggregation
+      ua TEXT,
+      country TEXT,
+      city TEXT,
+      region TEXT,
+      lat REAL,
+      lon REAL,
+      referrer TEXT,
+      path TEXT,
+      persona TEXT,                    -- if visit is on a /chat/:persona or /start/:persona route
+      session_id TEXT,                 -- if user has a session
+      is_bot INTEGER DEFAULT 0,        -- 0 = human, 1 = detected bot
+      bot_reason TEXT,                 -- why we flagged it (UA match, headless, etc.)
+      created_at INTEGER NOT NULL
+    );
+
     -- Indexes
     CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_magic_email ON magic_tokens(email);
     CREATE INDEX IF NOT EXISTS idx_subs_user ON subscriptions(user_id);
     CREATE INDEX IF NOT EXISTS idx_usage_lookup ON usage(session_or_user_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_visits_created ON visits(created_at);
+    CREATE INDEX IF NOT EXISTS idx_visits_ip_hash ON visits(ip_hash);
+    CREATE INDEX IF NOT EXISTS idx_visits_country ON visits(country);
+    CREATE INDEX IF NOT EXISTS idx_visits_bot ON visits(is_bot);
   `);
   console.log('[db] schema initialized at', dbPath);
 }

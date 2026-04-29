@@ -7,6 +7,7 @@ import { db, initSchema, Session } from './db/index.js';
 import { getPersona, PERSONAS } from './personas.js';
 import { streamChat, ChatMessage } from './llm.js';
 import { nsKey, recordMemory, recallMemories, formatMemoriesForPrompt, migrateNamespace } from './memory.js';
+import { logVisit, getDashboardStats } from './tracking.js';
 import {
   signSession, verifySession, sendMagicLink, consumeMagicToken,
   verifyGoogleIdToken, verifyAppleIdToken, findOrCreateUser,
@@ -95,6 +96,44 @@ app.get('/api/personas', (_req, res) => {
   }));
   res.json({ personas: publicPersonas });
 });
+
+// ═══════════════════════════════════════
+// VISIT TRACKING (anonymous logging for /dashboard)
+// ═══════════════════════════════════════
+
+// Public ingest — every page mount POSTs here. Trust client metadata
+// minimally; the IP, geo, and UA come from request headers (server-side).
+app.post('/api/track/visit', (req, res) => {
+  const body = req.body || {};
+  logVisit(req, {
+    path: typeof body.path === 'string' ? body.path.slice(0, 256) : undefined,
+    persona: typeof body.persona === 'string' ? body.persona.slice(0, 32) : undefined,
+    sessionId: typeof body.sessionId === 'string' ? body.sessionId.slice(0, 64) : undefined,
+    referrer: typeof body.referrer === 'string' ? body.referrer.slice(0, 512) : undefined,
+  });
+  res.status(204).end();
+});
+
+// Password-gated dashboard stats. Password is read from
+// DASHBOARD_PASS env var; falls back to '999999999' if unset for
+// dev convenience (rotate before launch). Client sends it via
+// `x-dashboard-pass` header. Same protection level as the frontend
+// gate — good enough for a stats-only view.
+app.get('/api/dashboard/stats', (req, res) => {
+  const expected = process.env.DASHBOARD_PASS || '999999999';
+  const provided = req.headers['x-dashboard-pass'] as string | undefined;
+  if (provided !== expected) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  try {
+    const stats = getDashboardStats();
+    res.json(stats);
+  } catch (err: any) {
+    console.error('[dashboard] stats error', err);
+    res.status(500).json({ error: err?.message || 'failed' });
+  }
+});
+
 
 // ═══════════════════════════════════════
 // SESSIONS — anonymous 7-day free trials
