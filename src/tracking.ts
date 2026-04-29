@@ -63,6 +63,12 @@ export type VisitMeta = {
   persona?: string;
   sessionId?: string;
   referrer?: string;
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_content?: string;
+  utm_term?: string;
+  campaign_slug?: string;
 };
 
 /**
@@ -88,8 +94,10 @@ export function logVisit(req: Request, meta: VisitMeta = {}): void {
       INSERT INTO visits (
         ip_full, ip_hash, ua, country, city, region, lat, lon,
         referrer, path, persona, session_id,
-        is_bot, bot_reason, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        is_bot, bot_reason,
+        utm_source, utm_medium, utm_campaign, utm_content, utm_term, campaign_slug,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       ip,
       hashIp(ip),
@@ -105,6 +113,12 @@ export function logVisit(req: Request, meta: VisitMeta = {}): void {
       meta.sessionId || null,
       bot.isBot ? 1 : 0,
       bot.reason,
+      meta.utm_source || null,
+      meta.utm_medium || null,
+      meta.utm_campaign || null,
+      meta.utm_content || null,
+      meta.utm_term || null,
+      meta.campaign_slug || null,
       Date.now(),
     );
   } catch (err) {
@@ -127,11 +141,14 @@ export type DashboardStats = {
   top_countries: { country: string; visits: number; unique: number }[];
   top_paths: { path: string; visits: number }[];
   top_personas: { persona: string; visits: number }[];
+  top_campaigns: { campaign: string; channel: string | null; visits: number; unique: number }[];
+  top_utm_sources: { source: string; visits: number; unique: number }[];
   globe_points: { lat: number; lon: number; city: string | null; country: string | null; visits: number }[];
   recent_visits: {
     ts: number; ip: string; country: string | null; city: string | null;
     ua: string | null; path: string | null; persona: string | null;
     is_bot: number; bot_reason: string | null;
+    utm_source: string | null; campaign_slug: string | null;
   }[];
   top_bot_uas: { ua: string; visits: number }[];
 };
@@ -202,8 +219,33 @@ export function getDashboardStats(): DashboardStats {
     LIMIT 500
   `).all(week) as any[];
 
+  const top_campaigns = db.prepare(`
+    SELECT
+      COALESCE(v.campaign_slug, v.utm_campaign) AS campaign,
+      c.channel AS channel,
+      COUNT(*) AS visits,
+      COUNT(DISTINCT v.ip_hash) AS unique_
+    FROM visits v
+    LEFT JOIN outreach_campaigns c ON c.slug = v.campaign_slug
+    WHERE (v.campaign_slug IS NOT NULL OR v.utm_campaign IS NOT NULL)
+      AND v.created_at > ?
+    GROUP BY campaign, channel
+    ORDER BY visits DESC
+    LIMIT 15
+  `).all(week) as any[];
+
+  const top_utm_sources = db.prepare(`
+    SELECT utm_source AS source, COUNT(*) AS visits, COUNT(DISTINCT ip_hash) AS unique_
+    FROM visits
+    WHERE utm_source IS NOT NULL AND created_at > ?
+    GROUP BY utm_source
+    ORDER BY visits DESC
+    LIMIT 12
+  `).all(week) as any[];
+
   const recent_visits = db.prepare(`
-    SELECT created_at AS ts, ip_full AS ip, country, city, ua, path, persona, is_bot, bot_reason
+    SELECT created_at AS ts, ip_full AS ip, country, city, ua, path, persona, is_bot, bot_reason,
+           utm_source, campaign_slug
     FROM visits
     ORDER BY created_at DESC
     LIMIT 100
@@ -228,6 +270,13 @@ export function getDashboardStats(): DashboardStats {
     top_countries: top_countries.map(r => ({ country: r.country, visits: Number(r.visits), unique: Number(r.unique_) })),
     top_paths: top_paths.map(r => ({ path: r.path, visits: Number(r.visits) })),
     top_personas: top_personas.map(r => ({ persona: r.persona, visits: Number(r.visits) })),
+    top_campaigns: top_campaigns.map(r => ({
+      campaign: r.campaign || '(none)',
+      channel: r.channel,
+      visits: Number(r.visits),
+      unique: Number(r.unique_),
+    })),
+    top_utm_sources: top_utm_sources.map(r => ({ source: r.source, visits: Number(r.visits), unique: Number(r.unique_) })),
     globe_points: globe_points.map(r => ({ lat: r.lat, lon: r.lon, city: r.city, country: r.country, visits: Number(r.visits) })),
     recent_visits: recent_visits.map(r => ({ ...r, ts: Number(r.ts), is_bot: Number(r.is_bot) })),
     top_bot_uas: top_bot_uas.map(r => ({ ua: r.ua, visits: Number(r.visits) })),

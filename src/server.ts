@@ -109,13 +109,93 @@ app.get('/api/personas', (_req, res) => {
 // minimally; the IP, geo, and UA come from request headers (server-side).
 app.post('/api/track/visit', (req, res) => {
   const body = req.body || {};
+  const s = (v: any, max = 96): string | undefined =>
+    typeof v === 'string' && v.length > 0 ? v.slice(0, max) : undefined;
   logVisit(req, {
-    path: typeof body.path === 'string' ? body.path.slice(0, 256) : undefined,
-    persona: typeof body.persona === 'string' ? body.persona.slice(0, 32) : undefined,
-    sessionId: typeof body.sessionId === 'string' ? body.sessionId.slice(0, 64) : undefined,
-    referrer: typeof body.referrer === 'string' ? body.referrer.slice(0, 512) : undefined,
+    path: s(body.path, 256),
+    persona: s(body.persona, 32),
+    sessionId: s(body.sessionId, 64),
+    referrer: s(body.referrer, 512),
+    utm_source: s(body.utm_source, 64),
+    utm_medium: s(body.utm_medium, 64),
+    utm_campaign: s(body.utm_campaign, 96),
+    utm_content: s(body.utm_content, 96),
+    utm_term: s(body.utm_term, 96),
+    campaign_slug: s(body.campaign_slug, 64),
   });
   res.status(204).end();
+});
+
+// ═══════════════════════════════════════
+// OUTREACH CAMPAIGNS — CRUD for the dashboard
+// ═══════════════════════════════════════
+
+app.get('/api/campaigns', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const status = (req.query.status as string) || undefined;
+    const rows = status
+      ? db.prepare(`SELECT * FROM outreach_campaigns WHERE status = ? ORDER BY launched_at DESC, created_at DESC`).all(status)
+      : db.prepare(`SELECT * FROM outreach_campaigns ORDER BY launched_at DESC, created_at DESC`).all();
+    res.json({ items: rows });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'failed' });
+  }
+});
+
+app.post('/api/campaigns', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const b = req.body || {};
+    if (!b.slug || !b.label || !b.channel) {
+      return res.status(400).json({ error: 'slug, label, channel required' });
+    }
+    const now = Date.now();
+    db.prepare(`
+      INSERT INTO outreach_campaigns
+        (slug, label, channel, persona, utm_source, utm_medium, utm_campaign, url, notes, status, launched_at, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(slug) DO UPDATE SET
+        label = excluded.label,
+        channel = excluded.channel,
+        persona = excluded.persona,
+        utm_source = excluded.utm_source,
+        utm_medium = excluded.utm_medium,
+        utm_campaign = excluded.utm_campaign,
+        url = excluded.url,
+        notes = excluded.notes,
+        status = excluded.status,
+        launched_at = excluded.launched_at,
+        updated_at = excluded.updated_at
+    `).run(
+      b.slug,
+      b.label,
+      b.channel,
+      b.persona || null,
+      b.utm_source || null,
+      b.utm_medium || null,
+      b.utm_campaign || null,
+      b.url || null,
+      b.notes || null,
+      b.status || 'planned',
+      b.status === 'live' ? (b.launched_at || now) : (b.launched_at || null),
+      now,
+      now,
+    );
+    res.json({ ok: true, slug: b.slug });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'failed' });
+  }
+});
+
+app.delete('/api/campaigns/:slug', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    db.prepare(`DELETE FROM outreach_campaigns WHERE slug = ?`).run(req.params.slug);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'failed' });
+  }
 });
 
 // Password-gated dashboard stats. Password is read from

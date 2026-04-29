@@ -89,11 +89,36 @@ export function initSchema() {
       lon REAL,
       referrer TEXT,
       path TEXT,
-      persona TEXT,                    -- if visit is on a /chat/:persona or /start/:persona route
-      session_id TEXT,                 -- if user has a session
-      is_bot INTEGER DEFAULT 0,        -- 0 = human, 1 = detected bot
-      bot_reason TEXT,                 -- why we flagged it (UA match, headless, etc.)
+      persona TEXT,
+      session_id TEXT,
+      is_bot INTEGER DEFAULT 0,
+      bot_reason TEXT,
+      utm_source TEXT,                 -- e.g. 'twitter', 'reddit', 'producthunt'
+      utm_medium TEXT,                 -- e.g. 'social', 'organic', 'paid'
+      utm_campaign TEXT,               -- e.g. 'kpop-launch-thread'
+      utm_content TEXT,                -- e.g. 'tweet-id-abc123'
+      utm_term TEXT,                   -- free-form
+      campaign_slug TEXT,              -- our normalized campaign id (joins outreach_campaigns.slug)
       created_at INTEGER NOT NULL
+    );
+
+    -- Outreach campaigns — operator-tracked launch pushes (a tweet,
+    -- a Reddit post, a podcast appearance, etc.). Used by /dashboard
+    -- to attribute visits and signups to their source.
+    CREATE TABLE IF NOT EXISTS outreach_campaigns (
+      slug TEXT PRIMARY KEY,           -- 'kpop-launch-thread', 'iron-brother-thread', etc.
+      label TEXT NOT NULL,             -- human-readable label
+      channel TEXT NOT NULL,           -- 'x', 'reddit', 'producthunt', 'indiehackers', 'hn', 'email', 'podcast', 'other'
+      persona TEXT,                    -- which persona this campaign primarily targets (or 'multi')
+      utm_source TEXT,
+      utm_medium TEXT,
+      utm_campaign TEXT,
+      url TEXT,                        -- the live link (the tweet, the PH listing, etc.)
+      notes TEXT,
+      status TEXT DEFAULT 'planned',   -- 'planned', 'live', 'paused', 'archived'
+      launched_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
     );
 
     -- Indexes
@@ -106,6 +131,9 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_visits_ip_hash ON visits(ip_hash);
     CREATE INDEX IF NOT EXISTS idx_visits_country ON visits(country);
     CREATE INDEX IF NOT EXISTS idx_visits_bot ON visits(is_bot);
+    CREATE INDEX IF NOT EXISTS idx_visits_utm_source ON visits(utm_source, created_at);
+    CREATE INDEX IF NOT EXISTS idx_visits_campaign ON visits(campaign_slug, created_at);
+    CREATE INDEX IF NOT EXISTS idx_campaigns_status ON outreach_campaigns(status, launched_at);
 
     -- Auto-generated marketing content queue (the viral hype pipeline).
     -- Each row is one ready-to-post variation. The dashboard surfaces
