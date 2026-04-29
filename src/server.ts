@@ -8,6 +8,7 @@ import { getPersona, PERSONAS } from './personas.js';
 import { streamChat, ChatMessage } from './llm.js';
 import { nsKey, recordMemory, recallMemories, formatMemoriesForPrompt, migrateNamespace } from './memory.js';
 import { logVisit, getDashboardStats } from './tracking.js';
+import { generateBatch, listQueue, updateStatus, startContentCron } from './content-factory.js';
 import {
   signSession, verifySession, sendMagicLink, consumeMagicToken,
   verifyGoogleIdToken, verifyAppleIdToken, findOrCreateUser,
@@ -15,6 +16,7 @@ import {
 import { createCheckoutSession, handleStripeWebhook, hasActiveSubscription, isStripeConfigured } from './billing.js';
 
 initSchema();
+startContentCron();
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -133,6 +135,63 @@ app.get('/api/dashboard/stats', (req, res) => {
     res.status(500).json({ error: err?.message || 'failed' });
   }
 });
+
+// ═══════════════════════════════════════
+// CONTENT FACTORY — viral hype pipeline
+// ═══════════════════════════════════════
+// Same password gate as the dashboard. The dashboard shows the queue,
+// triggers fresh generations, and lets the operator mark items as posted.
+
+function dashboardAuth(req: any, res: any): boolean {
+  const expected = process.env.DASHBOARD_PASS || '999999999';
+  const provided = req.headers['x-dashboard-pass'] as string | undefined;
+  if (provided !== expected) {
+    res.status(401).json({ error: 'unauthorized' });
+    return false;
+  }
+  return true;
+}
+
+app.get('/api/content/queue', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const status = (req.query.status as string) || 'pending';
+    const limit = Number(req.query.limit) || 60;
+    res.json({ items: listQueue({ status, limit }) });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'failed' });
+  }
+});
+
+app.post('/api/content/generate', async (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const count = Math.min(8, Math.max(1, Number(req.body?.count) || 3));
+    const items = await generateBatch(count);
+    res.json({ items, generated: items.length });
+  } catch (err: any) {
+    console.error('[content/generate] error', err);
+    res.status(500).json({ error: err?.message || 'failed' });
+  }
+});
+
+app.put('/api/content/:id/status', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const id = Number(req.params.id);
+    const status = req.body?.status as string;
+    if (!['posted', 'archived', 'rejected'].includes(status)) {
+      return res.status(400).json({ error: 'status must be posted, archived, or rejected' });
+    }
+    const postedUrl = typeof req.body?.posted_url === 'string' ? req.body.posted_url : undefined;
+    const ok = updateStatus(id, status as any, postedUrl);
+    if (!ok) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'failed' });
+  }
+});
+
 
 
 // ═══════════════════════════════════════

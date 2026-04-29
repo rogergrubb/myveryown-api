@@ -106,6 +106,28 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_visits_ip_hash ON visits(ip_hash);
     CREATE INDEX IF NOT EXISTS idx_visits_country ON visits(country);
     CREATE INDEX IF NOT EXISTS idx_visits_bot ON visits(is_bot);
+
+    -- Auto-generated marketing content queue (the viral hype pipeline).
+    -- Each row is one ready-to-post variation. The dashboard surfaces
+    -- them; the operator copies + posts; status flips when posted/archived.
+    CREATE TABLE IF NOT EXISTS content_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      persona TEXT,                      -- primary persona this targets ('iron', 'kpop', 'multi', etc.)
+      archetype TEXT NOT NULL,           -- 'founder_confession', 'contrarian_take', etc.
+      format TEXT NOT NULL,              -- 'single_tweet', 'thread_starter', 'reply_hook', etc.
+      hook TEXT,                         -- 1-line summary for the dashboard card
+      body TEXT NOT NULL,                -- the actual post copy
+      suggested_image TEXT,              -- e.g. '/og/iron.png'
+      tone_tags TEXT,                    -- comma-sep, for filtering ('vulnerable,raw' etc)
+      generated_at INTEGER NOT NULL,
+      generated_seed INTEGER,            -- so we can reproduce / debug
+      status TEXT DEFAULT 'pending',     -- 'pending', 'posted', 'archived', 'rejected'
+      posted_at INTEGER,
+      posted_url TEXT,                   -- optional: paste the live tweet URL after posting
+      notes TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_content_status ON content_queue(status, generated_at);
+    CREATE INDEX IF NOT EXISTS idx_content_archetype ON content_queue(archetype);
   `);
   console.log('[db] schema initialized at', dbPath);
 }
