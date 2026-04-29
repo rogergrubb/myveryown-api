@@ -508,7 +508,8 @@ app.post('/api/chat', chatLimit, async (req, res) => {
   // overrides it. Memory is recorded into a single namespace per
   // session/user, with each entry stamped by which persona spoke.
   // ─────────────────────────────────────────────────────────────
-  const { sessionId, messages, persona: bodyPersona } = req.body || {};
+  const { sessionId, messages, persona: bodyPersona, thread_mode: bodyThreadMode } = req.body || {};
+  const threadMode: 'isolated' | 'shared' = bodyThreadMode === 'shared' ? 'shared' : 'isolated';
   if (!sessionId || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'sessionId and messages required' });
   }
@@ -547,17 +548,39 @@ app.post('/api/chat', chatLimit, async (req, res) => {
     return res.status(400).json({ error: 'Last message must be user message' });
   }
 
-  // Recall memory from the UNIFIED namespace (no persona prefix anymore).
-  const namespace = nsKey(session.user_id || session.id);
-  const memories = await recallMemories(namespace, latestUser.content, 5);
+  // Memory namespace depends on thread mode.
+  // - isolated (default): per-persona namespace ("kpop:user_abc"), so Scarlet's
+  //   late-night thread doesn't bleed into Iron Brother's workout context.
+  // - shared (opt-in): single namespace per user/session ("user_abc"), every
+  //   persona reads + writes the same memory pool, with [PersonaName] stamps.
+  // First-load fallback: if isolated is empty, also peek at the unified namespace
+  // so users who built memory under the old shared model don't lose continuity.
+  const userOrSessionId = session.user_id || session.id;
+  const isolatedNs = nsKey(personaId, userOrSessionId);
+  const sharedNs = nsKey(userOrSessionId);
+  const namespace = threadMode === 'shared' ? sharedNs : isolatedNs;
+  let memories = await recallMemories(namespace, latestUser.content, 5);
+  if (threadMode === 'isolated' && memories.length === 0) {
+    // Lazy fallback to legacy shared namespace so existing users see their history
+    // for this persona until they build up new isolated memory.
+    try {
+      const legacy = await recallMemories(sharedNs, latestUser.content, 5);
+      const personaTag = `[${persona.name}]`;
+      memories = legacy.filter(m => m.content.startsWith(personaTag));
+    } catch { /* swallow */ }
+  }
   const memoryBlock = formatMemoriesForPrompt(memories);
 
   // Build the system prompt with memory + user name + cross-persona awareness
   let systemPrompt = persona.systemPrompt;
   if (session.name) systemPrompt += `\n\nThe user's name is ${session.name}. Use it naturally, but don't overuse it.`;
-  // Memory may include entries from OTHER personas in this same conversation.
-  // Tell the active persona how to handle that gracefully.
-  systemPrompt += `\n\nIMPORTANT: This user has ONE shared conversation thread that spans all 20 of our personas. The MEMORY CONTEXT below may include moments where a DIFFERENT persona spoke (entries are stamped with [PersonaName] at the top). You are now ${persona.name} responding. Reference what other personas covered when natural — like real friends comparing notes — but always stay in YOUR voice and YOUR domain. Don't pretend to be the other persona. If something is clearly outside your wheelhouse and another persona handled it well, you can naturally acknowledge that ("sounds like you and Iron Brother already covered the lifting side — for the food side, here's what I'd say...").`;
+  // In shared-mind mode the memory may include entries from OTHER personas.
+  // Tell the active persona how to handle that gracefully. In isolated mode
+  // (default), the persona only sees its own thread, so no cross-persona
+  // disclaimer needed — keeps the system prompt focused.
+  if (threadMode === 'shared') {
+    systemPrompt += `\n\nIMPORTANT: This user has ONE shared conversation thread that spans all 20 of our personas. The MEMORY CONTEXT below may include moments where a DIFFERENT persona spoke (entries are stamped with [PersonaName] at the top). You are now ${persona.name} responding. Reference what other personas covered when natural — like real friends comparing notes — but always stay in YOUR voice and YOUR domain. Don't pretend to be the other persona. If something is clearly outside your wheelhouse and another persona handled it well, you can naturally acknowledge that ("sounds like you and Iron Brother already covered the lifting side — for the food side, here's what I'd say...").`;
+  }
   systemPrompt += persona.memoryPromptAddendum.replace('{MEMORIES}', memoryBlock);
 
   // Stream the response
