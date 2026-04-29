@@ -58,10 +58,14 @@ export function initSchema() {
       tier TEXT NOT NULL,              -- 'kpop_monthly', 'kpop_annual', etc.
       status TEXT NOT NULL,            -- 'active', 'past_due', 'canceled', etc.
       current_period_end INTEGER NOT NULL,
+      cancelled_at INTEGER,            -- when customer.subscription.deleted fired (refund/cancel flow)
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id)
     );
+
+    -- ALTER TABLE for existing deployments — safe on SQLite (no-op if col exists)
+    -- Wrap in try/catch at runtime since SQLite doesn't have IF NOT EXISTS for columns.
 
     -- Usage tracking (for rate limits + cost monitoring)
     CREATE TABLE IF NOT EXISTS usage (
@@ -157,6 +161,8 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_content_status ON content_queue(status, generated_at);
     CREATE INDEX IF NOT EXISTS idx_content_archetype ON content_queue(archetype);
   `);
+  // Idempotent ALTER for already-deployed databases. ignore "duplicate column" errors.
+  try { db.exec(`ALTER TABLE subscriptions ADD COLUMN cancelled_at INTEGER`); } catch { /* column already exists */ }
   console.log('[db] schema initialized at', dbPath);
 }
 
