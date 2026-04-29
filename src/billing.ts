@@ -76,12 +76,20 @@ function upsertSubscription(sub: Stripe.Subscription, metadata: Stripe.Metadata)
     return;
   }
   const now = Date.now();
+  // Stamp cancelled_at the moment Stripe tells us this sub is canceled.
+  // Lets the operator render a "refund queue" / "expired subs" view in the
+  // dashboard, and avoids hard-deleting (we want the audit trail). COALESCE
+  // in the ON CONFLICT branch preserves the earliest cancel timestamp on
+  // webhook replays.
+  const cancelledAt = sub.status === 'canceled' ? now : null;
   db.prepare(`
-    INSERT INTO subscriptions (id, user_id, stripe_customer_id, persona, tier, status, current_period_end, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO subscriptions (id, user_id, stripe_customer_id, persona, tier, status, current_period_end, cancelled_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       status = excluded.status,
+      tier = excluded.tier,
       current_period_end = excluded.current_period_end,
+      cancelled_at = COALESCE(excluded.cancelled_at, subscriptions.cancelled_at),
       updated_at = excluded.updated_at
   `).run(
     sub.id,
@@ -91,6 +99,7 @@ function upsertSubscription(sub: Stripe.Subscription, metadata: Stripe.Metadata)
     metadata.cadence === 'annual' ? `${persona}_annual` : `${persona}_monthly`,
     sub.status,
     sub.current_period_end * 1000,
+    cancelledAt,
     now,
     now
   );
