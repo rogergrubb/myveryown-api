@@ -9,12 +9,14 @@ import { streamChat, ChatMessage } from './llm.js';
 import { nsKey, recordMemory, recallMemories, formatMemoriesForPrompt, migrateNamespace } from './memory.js';
 import { logVisit, getDashboardStats } from './tracking.js';
 import { generateBatch, listQueue, updateStatus, startContentCron } from './content-factory.js';
+import { runStartupChecks } from './startup-checks.js';
 import {
   signSession, verifySession, sendMagicLink, consumeMagicToken,
   verifyGoogleIdToken, verifyAppleIdToken, findOrCreateUser,
 } from './auth.js';
 import { createCheckoutSession, handleStripeWebhook, hasActiveSubscription, isStripeConfigured } from './billing.js';
 
+runStartupChecks();
 initSchema();
 startContentCron();
 
@@ -205,9 +207,21 @@ app.put('/api/content/:id/status', (req, res) => {
 const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;   // 7 days
 
 app.post('/api/session', (req, res) => {
-  const { name, persona } = req.body || {};
-  if (!persona || !getPersona(persona)) {
+  const { name, persona, ageVerified } = req.body || {};
+  const personaObj = persona ? getPersona(persona) : null;
+  if (!persona || !personaObj) {
     return res.status(400).json({ error: 'Invalid persona' });
+  }
+  // Age-gate enforcement — server-side. Frontend modal posts ageVerified=true
+  // ONLY after the user attests they're 18+ (or completes a stronger flow).
+  // Server requires the flag for any persona with an ageGate, regardless of
+  // what the client sends back from the cookie/localStorage.
+  if (personaObj.ageGate && !ageVerified) {
+    return res.status(403).json({
+      error: 'AGE_GATE_REQUIRED',
+      message: `${personaObj.name} requires age verification before chat begins.`,
+      ageGate: personaObj.ageGate,
+    });
   }
   const id = `session_${nanoid(20)}`;
   const now = Date.now();

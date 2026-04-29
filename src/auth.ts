@@ -114,17 +114,30 @@ export async function verifyGoogleIdToken(idToken: string): Promise<{ email: str
 }
 
 // ────────────────────────────────
-// Apple OAuth (similar pattern — verify ID token via Apple's JWKS)
-// Stub for now: we'd fetch https://appleid.apple.com/auth/keys and verify signature
+// Apple OAuth — verifies the Apple ID token signature against
+// Apple's published JWKS, plus issuer + audience claims.
+// SECURITY: never decode-without-verify for auth tokens. Doing so
+// allows attackers to forge any user identity by hand-crafting a
+// token with the email + sub they want to impersonate.
 // ────────────────────────────────
+import { createRemoteJWKSet, jwtVerify } from 'jose';
+
+const APPLE_JWKS = createRemoteJWKSet(new URL('https://appleid.apple.com/auth/keys'));
+
 export async function verifyAppleIdToken(idToken: string): Promise<{ email: string; sub: string } | null> {
-  // Simplified: decode without full JWKS verify for MVP
-  // Production: use jose or jsonwebtoken with public key from Apple JWKS
+  if (!idToken) return null;
   try {
-    const payload = jwt.decode(idToken) as any;
-    if (!payload || !payload.email || !payload.sub) return null;
-    return { email: payload.email, sub: payload.sub };
-  } catch {
+    const audience = process.env.APPLE_CLIENT_ID || undefined;
+    const { payload } = await jwtVerify(idToken, APPLE_JWKS, {
+      issuer: 'https://appleid.apple.com',
+      ...(audience ? { audience } : {}),
+    });
+    const email = typeof payload.email === 'string' ? payload.email : null;
+    const sub = typeof payload.sub === 'string' ? payload.sub : null;
+    if (!email || !sub) return null;
+    return { email, sub };
+  } catch (err) {
+    console.warn('[auth/apple] token verification failed', (err as Error)?.message);
     return null;
   }
 }

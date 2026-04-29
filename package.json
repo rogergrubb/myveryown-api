@@ -1,7 +1,7 @@
 {
   "name": "myveryown-api",
   "version": "1.0.0",
-  "description": "My Very Own — API backend. Auth, chat streaming, Stripe billing, Cortex memory.",
+  "description": "My Very Own \u2014 API backend. Auth, chat streaming, Stripe billing, Cortex memory.",
   "main": "dist/server.js",
   "type": "module",
   "scripts": {
@@ -21,7 +21,8 @@
     "nanoid": "^5.0.7",
     "nodemailer": "^6.9.15",
     "stripe": "^17.2.0",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "jose": "^5.9.6"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
