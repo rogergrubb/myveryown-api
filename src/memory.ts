@@ -15,19 +15,41 @@ type MemoryEntry = {
 };
 
 /**
- * Build a namespace key for this user-persona combination.
- * Anonymous sessions: kpop:session_abc123
- * Authenticated users: kpop:user_xyz789
+ * Build a namespace key. Two modes:
+ *
+ * UNIFIED (preferred, post-2026-04-26): one shared thread per user/session
+ *   nsKey(sessionOrUserId)   ->  "session_abc123"
+ *   - All 20 personas write into & read from the same namespace.
+ *   - Each memory entry has the persona stamped in the content body
+ *     ("[Iron Brother] User said ... / Iron Brother responded ...").
+ *   - The LLM sees the full cross-persona history and can reason about
+ *     who said what.
+ *
+ * LEGACY (kept for old call sites + old data): per-persona thread
+ *   nsKey(persona, sessionOrUserId)  ->  "kpop:session_abc123"
+ *   - Used for backwards-compat reads only; not used by /api/chat anymore.
  */
-export function nsKey(persona: string, sessionOrUserId: string): string {
-  return `${persona}:${sessionOrUserId}`;
+export function nsKey(personaOrId: string, sessionOrUserId?: string): string {
+  if (sessionOrUserId === undefined) {
+    // Unified mode — single arg = the user/session id only
+    return personaOrId;
+  }
+  // Legacy two-arg mode
+  return `${personaOrId}:${sessionOrUserId}`;
 }
 
-export async function recordMemory(namespace: string, userMessage: string, aiResponse: string): Promise<void> {
+export async function recordMemory(
+  namespace: string,
+  userMessage: string,
+  aiResponse: string,
+  personaLabel?: string,        // e.g. "Iron Brother" — stamped into memory body
+): Promise<void> {
   if (!CORTEX_URL) {
     console.warn('[cortex] CORTEX_URL not configured, skipping memory write');
     return;
   }
+  // In unified mode every entry tells future readers WHICH persona spoke.
+  const stamp = personaLabel ? `[${personaLabel}]\n` : '';
   try {
     const res = await fetch(`${CORTEX_URL}/api/memories`, {
       method: 'POST',
@@ -37,8 +59,8 @@ export async function recordMemory(namespace: string, userMessage: string, aiRes
       },
       body: JSON.stringify({
         namespace,
-        content: `User: ${userMessage}\nAssistant: ${aiResponse}`,
-        metadata: { timestamp: Date.now() },
+        content: `${stamp}User: ${userMessage}\nAssistant: ${aiResponse}`,
+        metadata: { timestamp: Date.now(), persona: personaLabel ?? null },
       }),
     });
     if (!res.ok) {

@@ -237,7 +237,17 @@ app.get('/api/auth/me', (req, res) => {
 // CHAT — streaming
 // ═══════════════════════════════════════
 app.post('/api/chat', chatLimit, async (req, res) => {
-  const { sessionId, messages } = req.body || {};
+  // ─────────────────────────────────────────────────────────────
+  // SHARED-THREAD ARCHITECTURE (post-2026-04-26)
+  //
+  // /api/chat takes ONE conversation (the messages[] array) and a
+  // persona-of-the-moment (req.body.persona). The persona is the voice
+  // that answers THIS turn. The session has a "default persona" stored
+  // (mostly historical — the first one the user picked) but the request
+  // overrides it. Memory is recorded into a single namespace per
+  // session/user, with each entry stamped by which persona spoke.
+  // ─────────────────────────────────────────────────────────────
+  const { sessionId, messages, persona: bodyPersona } = req.body || {};
   if (!sessionId || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'sessionId and messages required' });
   }
@@ -246,10 +256,19 @@ app.post('/api/chat', chatLimit, async (req, res) => {
   const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as Session | undefined;
   if (!session) return res.status(404).json({ error: 'Session not found' });
 
+  // Resolve which persona is responding to THIS turn.
+  // Body persona wins; falls back to whatever was stored on the session.
+  const personaId: string = (typeof bodyPersona === 'string' && getPersona(bodyPersona))
+    ? bodyPersona
+    : session.persona;
+  const persona = getPersona(personaId);
+  if (!persona) return res.status(400).json({ error: 'Invalid persona' });
+
   // Check expiration + subscription
+  // Subscription unlock is now ANY active sub on the user (one sub = all 20).
   const now = Date.now();
   const isAuthed = !!session.user_id;
-  const isSubscribed = isAuthed && hasActiveSubscription(session.user_id!, session.persona);
+  const isSubscribed = isAuthed && hasActiveSubscription(session.user_id!, personaId);
 
   if (!isAuthed && session.expires_at < now) {
     return res.status(402).json({ error: 'Session expired', code: 'SESSION_EXPIRED', requiresAuth: true });
@@ -257,12 +276,9 @@ app.post('/api/chat', chatLimit, async (req, res) => {
   if (isAuthed && !isSubscribed) {
     // Authenticated but no subscription — soft paywall at 10 messages
     if (session.message_count >= 10) {
-      return res.status(402).json({ error: 'Trial limit reached', code: 'NEEDS_SUBSCRIPTION', persona: session.persona });
+      return res.status(402).json({ error: 'Trial limit reached', code: 'NEEDS_SUBSCRIPTION', persona: personaId });
     }
   }
-
-  const persona = getPersona(session.persona);
-  if (!persona) return res.status(400).json({ error: 'Invalid persona' });
 
   // Get user name and latest message
   const latestUser = messages[messages.length - 1] as ChatMessage | undefined;
@@ -270,14 +286,17 @@ app.post('/api/chat', chatLimit, async (req, res) => {
     return res.status(400).json({ error: 'Last message must be user message' });
   }
 
-  // Recall memory
-  const namespace = nsKey(session.persona, session.user_id || session.id);
+  // Recall memory from the UNIFIED namespace (no persona prefix anymore).
+  const namespace = nsKey(session.user_id || session.id);
   const memories = await recallMemories(namespace, latestUser.content, 5);
   const memoryBlock = formatMemoriesForPrompt(memories);
 
-  // Build the system prompt with memory + user name
+  // Build the system prompt with memory + user name + cross-persona awareness
   let systemPrompt = persona.systemPrompt;
   if (session.name) systemPrompt += `\n\nThe user's name is ${session.name}. Use it naturally, but don't overuse it.`;
+  // Memory may include entries from OTHER personas in this same conversation.
+  // Tell the active persona how to handle that gracefully.
+  systemPrompt += `\n\nIMPORTANT: This user has ONE shared conversation thread that spans all 20 of our personas. The MEMORY CONTEXT below may include moments where a DIFFERENT persona spoke (entries are stamped with [PersonaName] at the top). You are now ${persona.name} responding. Reference what other personas covered when natural — like real friends comparing notes — but always stay in YOUR voice and YOUR domain. Don't pretend to be the other persona. If something is clearly outside your wheelhouse and another persona handled it well, you can naturally acknowledge that ("sounds like you and Iron Brother already covered the lifting side — for the food side, here's what I'd say...").`;
   systemPrompt += persona.memoryPromptAddendum.replace('{MEMORIES}', memoryBlock);
 
   // Stream the response
@@ -309,7 +328,7 @@ app.post('/api/chat', chatLimit, async (req, res) => {
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       session.user_id || sessionId,
-      session.persona,
+      personaId,                              // log THIS turn's persona (not session default)
       usageData.model,
       usageData.inputTokens,
       usageData.outputTokens,
@@ -317,7 +336,10 @@ app.post('/api/chat', chatLimit, async (req, res) => {
       Date.now()
     );
 
-    recordMemory(namespace, latestUser.content, fullResponse).catch(err => console.error('[memory] record failed', err));
+    // Memory entry tagged with the responding persona so future recalls
+    // can reason about which persona said what across the shared thread.
+    recordMemory(namespace, latestUser.content, fullResponse, persona.name)
+      .catch(err => console.error('[memory] record failed', err));
 
     res.write(`data: ${JSON.stringify({ type: 'done', usage: usageData, messageCount: session.message_count + 1 })}\n\n`);
     res.end();

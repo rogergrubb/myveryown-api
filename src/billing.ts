@@ -96,12 +96,20 @@ function upsertSubscription(sub: Stripe.Subscription, metadata: Stripe.Metadata)
   );
 }
 
-export function hasActiveSubscription(userId: string, persona: string): boolean {
+/**
+ * Returns true if the user has ANY active subscription.
+ *
+ * Post-2026-04-26: shared-thread architecture. One subscription unlocks
+ * all 20 personas (the user's whole conversation belongs to them, not
+ * to a per-persona silo). The `persona` argument is kept for API stability
+ * and logging — it has no effect on the unlock decision.
+ */
+export function hasActiveSubscription(userId: string, _persona?: string): boolean {
   const row = db.prepare(`
     SELECT 1 FROM subscriptions
-    WHERE user_id = ? AND persona = ? AND status IN ('active', 'trialing')
+    WHERE user_id = ? AND status IN ('active', 'trialing')
       AND current_period_end > ?
     LIMIT 1
-  `).get(userId, persona, Date.now());
+  `).get(userId, Date.now());
   return !!row;
 }
