@@ -22,7 +22,8 @@
     "nodemailer": "^6.9.15",
     "stripe": "^17.2.0",
     "zod": "^3.23.8",
-    "jose": "^5.9.6"
+    "jose": "^5.9.6",
+    "twitter-api-v2": "^1.18.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",

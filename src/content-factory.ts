@@ -393,6 +393,16 @@ export type GeneratedItem = {
   suggested_image: string | null;
   tone_tags: string;
   generated_at: number;
+  status?: string;
+  scheduled_for?: number | null;
+  posted_at?: number | null;
+  posted_url?: string | null;
+  posted_tweet_id?: string | null;
+  auto_posted?: number;
+  engagement_likes?: number | null;
+  engagement_retweets?: number | null;
+  engagement_replies?: number | null;
+  engagement_impressions?: number | null;
 };
 
 /**
@@ -491,16 +501,23 @@ export async function generateBatch(count = 3): Promise<GeneratedItem[]> {
 // ────────────────────────────────────────────────────────────────
 
 export function listQueue(opts: { status?: string; limit?: number } = {}): GeneratedItem[] {
-  const status = opts.status || 'pending';
-  const limit = Math.min(200, opts.limit || 60);
+  const statusList = (opts.status || 'pending').split(',').map(s => s.trim()).filter(Boolean);
+  const limit = Math.min(400, opts.limit || 60);
+  const placeholders = statusList.map(() => '?').join(',');
+  // Order by scheduled_for first if any items are scheduled, else generated_at
   const rows = db.prepare(`
     SELECT id, persona, archetype, format, hook, body, suggested_image, tone_tags,
-           generated_at, status, posted_at, posted_url
+           generated_at, status, scheduled_for, posted_at, posted_url, posted_tweet_id,
+           auto_posted, engagement_likes, engagement_retweets, engagement_replies,
+           engagement_impressions
     FROM content_queue
-    WHERE status = ?
-    ORDER BY generated_at DESC
+    WHERE status IN (${placeholders})
+    ORDER BY
+      CASE WHEN status = 'scheduled' THEN scheduled_for END ASC,
+      CASE WHEN status = 'posted'    THEN posted_at      END DESC,
+      generated_at DESC
     LIMIT ?
-  `).all(status, limit) as any[];
+  `).all(...statusList, limit) as any[];
   return rows.map(r => ({
     id: Number(r.id),
     persona: r.persona,
@@ -511,6 +528,16 @@ export function listQueue(opts: { status?: string; limit?: number } = {}): Gener
     suggested_image: r.suggested_image,
     tone_tags: r.tone_tags || '',
     generated_at: Number(r.generated_at),
+    status: r.status,
+    scheduled_for: r.scheduled_for ? Number(r.scheduled_for) : null,
+    posted_at: r.posted_at ? Number(r.posted_at) : null,
+    posted_url: r.posted_url,
+    posted_tweet_id: r.posted_tweet_id,
+    auto_posted: Number(r.auto_posted || 0),
+    engagement_likes: r.engagement_likes !== null ? Number(r.engagement_likes) : null,
+    engagement_retweets: r.engagement_retweets !== null ? Number(r.engagement_retweets) : null,
+    engagement_replies: r.engagement_replies !== null ? Number(r.engagement_replies) : null,
+    engagement_impressions: r.engagement_impressions !== null ? Number(r.engagement_impressions) : null,
   }));
 }
 

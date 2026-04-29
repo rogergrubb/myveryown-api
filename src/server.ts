@@ -11,6 +11,10 @@ import { logVisit, getDashboardStats } from './tracking.js';
 import { generateBatch, listQueue, updateStatus, startContentCron } from './content-factory.js';
 import { runStartupChecks } from './startup-checks.js';
 import {
+  scheduleItem, unscheduleItem, autoScheduleNext, startScheduler,
+} from './scheduler.js';
+import { isConfigured as twitterConfigured, postTweet } from './twitter.js';
+import {
   signSession, verifySession, sendMagicLink, consumeMagicToken,
   verifyGoogleIdToken, verifyAppleIdToken, findOrCreateUser,
 } from './auth.js';
@@ -19,6 +23,7 @@ import { createCheckoutSession, handleStripeWebhook, hasActiveSubscription, isSt
 runStartupChecks();
 initSchema();
 startContentCron();
+startScheduler();
 
 const app = express();
 const PORT = Number(process.env.PORT || 3000);
@@ -273,6 +278,140 @@ app.put('/api/content/:id/status', (req, res) => {
     res.status(500).json({ error: err?.message || 'failed' });
   }
 });
+
+// ─── Scheduling ───
+app.post('/api/content/:id/schedule', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const id = Number(req.params.id);
+    const when = Number(req.body?.scheduled_for);
+    if (!Number.isFinite(when) || when < Date.now()) {
+      return res.status(400).json({ error: 'scheduled_for must be a future timestamp (ms)' });
+    }
+    const ok = scheduleItem(id, when);
+    if (!ok) return res.status(404).json({ error: 'not found or wrong status' });
+    res.json({ ok: true });
+  } catch (err: any) { res.status(500).json({ error: err?.message || 'failed' }); }
+});
+
+app.post('/api/content/:id/unschedule', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const id = Number(req.params.id);
+    const ok = unscheduleItem(id);
+    if (!ok) return res.status(404).json({ error: 'not found or not scheduled' });
+    res.json({ ok: true });
+  } catch (err: any) { res.status(500).json({ error: err?.message || 'failed' }); }
+});
+
+app.post('/api/content/auto-schedule', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const count = Math.min(20, Math.max(1, Number(req.body?.count) || 6));
+    const result = autoScheduleNext(count);
+    res.json(result);
+  } catch (err: any) { res.status(500).json({ error: err?.message || 'failed' }); }
+});
+
+app.post('/api/content/:id/post-now', async (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const id = Number(req.params.id);
+    if (!twitterConfigured()) {
+      return res.status(503).json({ error: 'X API not configured — set X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET' });
+    }
+    const item = (await import('./db/index.js')).db.prepare(`SELECT id, body, status FROM content_queue WHERE id = ?`).get(id) as any;
+    if (!item) return res.status(404).json({ error: 'not found' });
+    if (item.status === 'posted') return res.status(400).json({ error: 'already posted' });
+    const result = await postTweet(item.body);
+    if (!result.ok) return res.status(502).json({ error: result.error || 'post failed' });
+    (await import('./db/index.js')).db.prepare(`
+      UPDATE content_queue
+      SET status = 'posted', posted_at = ?, posted_url = ?, posted_tweet_id = ?, auto_posted = 1
+      WHERE id = ?
+    `).run(Date.now(), result.url, result.tweet_id, id);
+    res.json({ ok: true, tweet_id: result.tweet_id, url: result.url });
+  } catch (err: any) { res.status(500).json({ error: err?.message || 'failed' }); }
+});
+
+// ─── Scheduler config visibility ───
+app.get('/api/content/scheduler-status', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  res.json({
+    twitter_configured: twitterConfigured(),
+    auto_posting: twitterConfigured(),
+    setup_url: 'https://developer.x.com/',
+    required_env: ['X_API_KEY', 'X_API_SECRET', 'X_ACCESS_TOKEN', 'X_ACCESS_TOKEN_SECRET'],
+  });
+});
+
+
+// ─── Scheduling ───
+app.post('/api/content/:id/schedule', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const id = Number(req.params.id);
+    const when = Number(req.body?.scheduled_for);
+    if (!Number.isFinite(when) || when < Date.now()) {
+      return res.status(400).json({ error: 'scheduled_for must be a future timestamp (ms)' });
+    }
+    const ok = scheduleItem(id, when);
+    if (!ok) return res.status(404).json({ error: 'not found or wrong status' });
+    res.json({ ok: true });
+  } catch (err: any) { res.status(500).json({ error: err?.message || 'failed' }); }
+});
+
+app.post('/api/content/:id/unschedule', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const id = Number(req.params.id);
+    const ok = unscheduleItem(id);
+    if (!ok) return res.status(404).json({ error: 'not found or not scheduled' });
+    res.json({ ok: true });
+  } catch (err: any) { res.status(500).json({ error: err?.message || 'failed' }); }
+});
+
+app.post('/api/content/auto-schedule', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const count = Math.min(20, Math.max(1, Number(req.body?.count) || 6));
+    const result = autoScheduleNext(count);
+    res.json(result);
+  } catch (err: any) { res.status(500).json({ error: err?.message || 'failed' }); }
+});
+
+app.post('/api/content/:id/post-now', async (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const id = Number(req.params.id);
+    if (!twitterConfigured()) {
+      return res.status(503).json({ error: 'X API not configured — set X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET' });
+    }
+    const item = (await import('./db/index.js')).db.prepare(`SELECT id, body, status FROM content_queue WHERE id = ?`).get(id) as any;
+    if (!item) return res.status(404).json({ error: 'not found' });
+    if (item.status === 'posted') return res.status(400).json({ error: 'already posted' });
+    const result = await postTweet(item.body);
+    if (!result.ok) return res.status(502).json({ error: result.error || 'post failed' });
+    (await import('./db/index.js')).db.prepare(`
+      UPDATE content_queue
+      SET status = 'posted', posted_at = ?, posted_url = ?, posted_tweet_id = ?, auto_posted = 1
+      WHERE id = ?
+    `).run(Date.now(), result.url, result.tweet_id, id);
+    res.json({ ok: true, tweet_id: result.tweet_id, url: result.url });
+  } catch (err: any) { res.status(500).json({ error: err?.message || 'failed' }); }
+});
+
+// ─── Scheduler config visibility ───
+app.get('/api/content/scheduler-status', (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  res.json({
+    twitter_configured: twitterConfigured(),
+    auto_posting: twitterConfigured(),
+    setup_url: 'https://developer.x.com/',
+    required_env: ['X_API_KEY', 'X_API_SECRET', 'X_ACCESS_TOKEN', 'X_ACCESS_TOKEN_SECRET'],
+  });
+});
+
 
 
 

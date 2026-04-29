@@ -140,26 +140,39 @@ export function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_campaigns_status ON outreach_campaigns(status, launched_at);
 
     -- Auto-generated marketing content queue (the viral hype pipeline).
-    -- Each row is one ready-to-post variation. The dashboard surfaces
-    -- them; the operator copies + posts; status flips when posted/archived.
+    -- Each row is one ready-to-post variation. Status lifecycle:
+    --   pending -> scheduled (scheduled_for set) -> posted (X API success)
+    --   pending -> posted (manual via "Open in X")
+    --   pending -> archived | rejected
     CREATE TABLE IF NOT EXISTS content_queue (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      persona TEXT,                      -- primary persona this targets ('iron', 'kpop', 'multi', etc.)
-      archetype TEXT NOT NULL,           -- 'founder_confession', 'contrarian_take', etc.
-      format TEXT NOT NULL,              -- 'single_tweet', 'thread_starter', 'reply_hook', etc.
-      hook TEXT,                         -- 1-line summary for the dashboard card
-      body TEXT NOT NULL,                -- the actual post copy
-      suggested_image TEXT,              -- e.g. '/og/iron.png'
-      tone_tags TEXT,                    -- comma-sep, for filtering ('vulnerable,raw' etc)
+      persona TEXT,
+      archetype TEXT NOT NULL,
+      format TEXT NOT NULL,
+      hook TEXT,
+      body TEXT NOT NULL,
+      suggested_image TEXT,
+      tone_tags TEXT,
       generated_at INTEGER NOT NULL,
-      generated_seed INTEGER,            -- so we can reproduce / debug
-      status TEXT DEFAULT 'pending',     -- 'pending', 'posted', 'archived', 'rejected'
+      generated_seed INTEGER,
+      status TEXT DEFAULT 'pending',     -- 'pending', 'scheduled', 'posted', 'archived', 'rejected'
+      scheduled_for INTEGER,             -- target post time (ms epoch); null until scheduled
       posted_at INTEGER,
-      posted_url TEXT,                   -- optional: paste the live tweet URL after posting
+      posted_url TEXT,
+      posted_tweet_id TEXT,              -- X tweet ID, if auto-posted via API
+      auto_posted INTEGER DEFAULT 0,     -- 1 if posted by scheduler vs. manual mark
+      engagement_likes INTEGER,
+      engagement_retweets INTEGER,
+      engagement_replies INTEGER,
+      engagement_impressions INTEGER,
+      engagement_fetched_at INTEGER,
+      campaign_slug TEXT,                -- ties to outreach_campaigns
       notes TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_content_status ON content_queue(status, generated_at);
     CREATE INDEX IF NOT EXISTS idx_content_archetype ON content_queue(archetype);
+    CREATE INDEX IF NOT EXISTS idx_content_scheduled ON content_queue(status, scheduled_for);
+    CREATE INDEX IF NOT EXISTS idx_content_posted ON content_queue(posted_at) WHERE posted_tweet_id IS NOT NULL;
   `);
   // Idempotent ALTER for already-deployed databases. ignore "duplicate column" errors.
   try { db.exec(`ALTER TABLE subscriptions ADD COLUMN cancelled_at INTEGER`); } catch { /* column already exists */ }
