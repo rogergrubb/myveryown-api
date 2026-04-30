@@ -48,10 +48,10 @@ const ARCHETYPES = [
   },
   {
     id: 'persona_switch_moment',
-    description: 'Demonstrates the persona-switching mechanic abstractly. Use "imagine" or "here is how it works" framing. Never write fictional user dialogue or invent a user named Maria/Alex/etc. — that reads as fabricated testimonial (FTC violation).',
+    description: 'Demonstrates the persona-cast mechanic. The default is PRIVATE threads — each persona keeps their own private slice of you. Frame as "right voice for the right moment" or "a cast of companions, each remembering their own piece of your life." If mentioning the optional "shared mind" toggle, label it explicitly as opt-in. Use "imagine" or "here is how it works" framing. Never write fictional user dialogue or invent a user named Maria/Alex/etc. — that reads as fabricated testimonial (FTC violation).',
     tone: 'explanatory, not narrative; mechanic-first, not story-first',
     openingPattern: 'Start with "Here is the thing my AI does that the others do not" or "Imagine this:". Never start with a user quote.',
-    goodExample: 'The mechanic: tap a different persona mid-conversation. The new one already knows what you said. Same memory, different voice.',
+    goodExample: 'The mechanic: pick the voice that fits the moment. Iron Brother for the workout, Scarlet for the late night. Each remembers their own slice of you. Tap a toggle if you want them comparing notes — your call.',
     badExample: 'Maria switched from Iron to Hearth after a tough day. "I felt seen for the first time." (Fabricated user quote.)',
   },
   {
@@ -67,7 +67,7 @@ const ARCHETYPES = [
     description: 'Shows real architecture or product decisions. Builder-to-builder. Concrete numbers or design choices ONLY if they are real. No fake metrics.',
     tone: 'precise, no hype, no rounded marketing numbers',
     openingPattern: 'Start with a concrete fact about how something works.',
-    goodExample: 'Switching personas mid-chat reuses the same memory namespace. Each entry is stamped with who said it. The next persona reads everything, responds in their voice.',
+    goodExample: 'Each persona has its own private memory namespace. There is an opt-in shared-mind toggle that lets all 20 read what you said to the others. Defaults off — your call.',
     badExample: 'Our revolutionary AI architecture transforms the way you think about memory. (Marketer slop.)',
   },
   {
@@ -242,7 +242,7 @@ function buildPrompt(opts: {
     ? `\nSECONDARY PERSONA (for switch-moment posts): ${secondaryPersona.name} (${secondaryPersona.tagline})`
     : '';
 
-  return `You are writing a marketing post for myveryown.page — an AI companion product with 20 specialist personas (K-pop bestie, fitness coach, faith companion, pet loss support, etc.) that all share ONE memory of the user. The killer feature: you can switch personas mid-conversation and the new persona references what the previous one said, in their own voice. One subscription unlocks all 20. 7-day free trial, no signup, no credit card.
+  return `You are writing a marketing post for myveryown.page — an AI companion product with 20 specialist personas (K-pop bestie, fitness coach, faith companion, pet loss support, etc.). Each persona keeps its OWN PRIVATE memory of the user by default — Iron Brother knows your training history; Scarlet knows your late-night thoughts. They do NOT share memories with each other unless the user flips an optional "shared mind" toggle. The killer feature is the CAST: a closet of distinct voices for different parts of life, each remembering you in their own way. One subscription unlocks all 20. 7-day free trial, no signup, no credit card.
 
 THE 20 PERSONAS:
 ${personaCatalog}
