@@ -4,7 +4,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { nanoid } from 'nanoid';
 import { db, initSchema, Session } from './db/index.js';
-import { getPersona, PERSONAS } from './personas.js';
+import { getPersona, PERSONAS, IMAGE_STYLE_HINTS } from './personas.js';
 import { streamChat, generateImage, ChatMessage } from './llm.js';
 import { nsKey, recordMemory, recallMemories, formatMemoriesForPrompt, migrateNamespace } from './memory.js';
 import { logVisit, getDashboardStats } from './tracking.js';
@@ -666,9 +666,11 @@ app.post('/api/image/generate', chatLimit, async (req, res) => {
   }
 
   try {
+    const styleHint = IMAGE_STYLE_HINTS[personaId];
     const img = await generateImage({
       prompt: prompt.trim(),
       personaName: persona.name,
+      personaStyleHint: styleHint,
     });
     // Each image generation counts as a message turn for trial accounting.
     db.prepare('UPDATE sessions SET message_count = message_count + 1 WHERE id = ?').run(sessionId);

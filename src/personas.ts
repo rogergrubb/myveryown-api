@@ -435,3 +435,36 @@ export const MODEL_PRICING = {
   'claude-sonnet': { input: 3000, output: 15000 },  // $3.00 / $15.00
   'deepseek':      { input: 140,  output: 280  },   // $0.14 / $0.28
 } as const;
+
+
+// ════════════════════════════════════════════════════════════════
+// IMAGE STYLE HINTS (post-2026-04-29)
+// ────────────────────────────────────────────────────────────────
+// Per-persona visual aesthetic guidance, passed to generateImage().
+// Keeps each persona's images on-brand instead of generic Gemini output.
+// Edit these to tune the visual feel per persona — they're appended to
+// the user's prompt as a "Style:" directive.
+// ════════════════════════════════════════════════════════════════
+
+export const IMAGE_STYLE_HINTS: Record<string, string> = {
+  kpop: 'Bright editorial K-pop magazine aesthetic. Pastel gradient backdrop, idol-photoshoot studio lighting, glossy and aspirational. Soft pinks, lilacs, mint, occasional sparkle and soft bokeh. Never named celebrities — original styling only.',
+  scarlet: 'Cinematic low-light intimacy. Deep amber and crimson palette, warm tungsten lamps, late-night confessional mood. Subtle 35mm film grain, soft focus falloff, never harsh or clinical.',
+  hearth: 'Warm cocooning palette. Golden-hour light through curtains, cozy interior textures (knitted fabric, ceramic mugs, candlelight). Calming and emotionally safe. Avoid faces, focus on softness.',
+  iron: 'Gritty gym documentary aesthetic. Harsh window light cutting through dust motes, weathered chalk and steel, rust and rubber, sweat-on-concrete realism. No glossy fitness-influencer polish.',
+  study: 'Clean focused desk aesthetic. Soft natural daylight, organized minimalism, notebook paper textures, cream and graphite tones. Lo-fi study-with-me vibe — calm and uncluttered.',
+  shepherd: 'Serene sacred light. Soft cathedral or chapel light, dust motes drifting, contemplative palette of cream and gold. Reverent without specific religious iconography (no crosses, no scripture text).',
+  rainbow: 'Soft watercolor and dawn-sky palette. Pastel pinks, blues, lavender, gentle clouds. Dreamlike, peaceful, hopeful. Never graphic, never literally sad — comforting always.',
+  promise: 'Editorial wedding photography aesthetic. Cream, blush, sage, and warm gold. Soft romantic lighting, magazine-quality composition. Focus on details — rings, fabric, flowers, place settings — more than faces.',
+  little: 'Soft pastel palette with gentle morning light. Hopeful warmth without being clinical. Focus on small tender objects (tiny socks, soft fabrics, sunlit nursery details) — never close-up pregnant-belly imagery, never medical.',
+  cast: 'Outdoor lifestyle photography. Golden-hour by water, dawn mist on a lake, weathered tackle box and leather details. Slightly desaturated, lived-in, patient.',
+  gear: 'Garage workshop drama. Deep shadows lit by a single warm halogen, oil-stained concrete, mechanical textures, project-car detail. Documentary mechanic-shop feel — not catalog.',
+  fuel: 'Real-food photography. Natural overhead daylight, plain ceramic plates, wholesome but unstaged. Avoid glossy fitness-influencer protein-shake aesthetic. Judgment-free, approachable, no diet-culture cues.',
+  player: 'Gaming setup aesthetic. Cinematic dim with cyan and magenta screen-light spill, RGB keyboard glow on a desk, neo-vaporwave hint without kitsch. Dust in light beams, late-night session feel.',
+  ledger: 'Clean minimal financial-planner aesthetic. Cool blues, warm wood, focused desk lamp, ledger book and reading glasses. Never flashy money imagery (no stacks of cash, no luxury brands, no champagne).',
+  ink: 'Warm library aesthetic. Single desk lamp, manuscript pages, ink stains, leather-bound texture, candlelight or moonlight. Intimate, contemplative, mid-night writing session.',
+  handy: 'Workshop daylight. Real tools on a wood bench, sawdust, weekend-DIY honesty. Avoid the over-polished hardware-store glossy stock-photo look — this is someone\'s real garage.',
+  chords: 'Warm practice room. A piano or guitar in side-lit afternoon glow, sheet music on the stand, intimate detail of strings or keys. Music-school dignity, not concert-hall grandeur.',
+  thumb: 'Morning garden light. Dew on leaves, hands in soil, raised beds and tools, vibrant but earthy. Real backyard garden — not curated botanical-magazine setpiece.',
+  twelfth: 'Stadium fan-section drama. Floodlight glow, generic jerseys and crowd silhouettes, game-day mood. NEVER specific team logos, real player likenesses, or league trademarks — generic colors and crowd energy only.',
+  betty: 'Warm vintage palette. Sepia-leaning tones, soft window light, dignified and unsentimental. A teacup on a saucer, framed photographs, a knitted blanket. Avoid every condescending \'old people\' visual trope.',
+};
