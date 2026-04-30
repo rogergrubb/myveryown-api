@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { nanoid } from 'nanoid';
 import { db, initSchema, Session } from './db/index.js';
 import { getPersona, PERSONAS } from './personas.js';
-import { streamChat, ChatMessage } from './llm.js';
+import { streamChat, generateImage, ChatMessage } from './llm.js';
 import { nsKey, recordMemory, recallMemories, formatMemoriesForPrompt, migrateNamespace } from './memory.js';
 import { logVisit, getDashboardStats } from './tracking.js';
 import { generateBatch, listQueue, updateStatus, startContentCron } from './content-factory.js';
@@ -633,6 +633,60 @@ app.post('/api/chat', chatLimit, async (req, res) => {
     res.end();
   }
 });
+
+app.post('/api/image/generate', chatLimit, async (req, res) => {
+  const { sessionId, persona: bodyPersona, prompt } = req.body || {};
+  if (!sessionId || typeof prompt !== 'string' || prompt.trim().length === 0) {
+    return res.status(400).json({ error: 'sessionId and prompt required' });
+  }
+  if (prompt.length > 1000) {
+    return res.status(400).json({ error: 'prompt too long (max 1000 chars)' });
+  }
+
+  // Same session/auth/limit gate as /api/chat
+  const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as Session | undefined;
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+
+  const personaId: string = (typeof bodyPersona === 'string' && getPersona(bodyPersona))
+    ? bodyPersona
+    : session.persona;
+  const persona = getPersona(personaId);
+  if (!persona) return res.status(400).json({ error: 'Invalid persona' });
+
+  const now = Date.now();
+  const isAuthed = !!session.user_id;
+  const isSubscribed = isAuthed && hasActiveSubscription(session.user_id!, personaId);
+  if (!isAuthed && session.expires_at < now) {
+    return res.status(402).json({ error: 'Session expired', code: 'SESSION_EXPIRED', requiresAuth: true });
+  }
+  if (isAuthed && !isSubscribed) {
+    if (session.message_count >= 10) {
+      return res.status(402).json({ error: 'Trial limit reached', code: 'NEEDS_SUBSCRIPTION', persona: personaId });
+    }
+  }
+
+  try {
+    const img = await generateImage({
+      prompt: prompt.trim(),
+      personaName: persona.name,
+    });
+    // Each image generation counts as a message turn for trial accounting.
+    db.prepare('UPDATE sessions SET message_count = message_count + 1 WHERE id = ?').run(sessionId);
+    res.json({
+      ok: true,
+      dataUrl: img.dataUrl,
+      mimeType: img.mimeType,
+      bytes: img.bytes,
+      model: img.model,
+      caption: img.caption,
+      messageCount: session.message_count + 1,
+    });
+  } catch (err: any) {
+    console.error('[image] generation failed', err);
+    res.status(502).json({ error: err?.message || 'Image generation failed' });
+  }
+});
+
 
 // ═══════════════════════════════════════
 // SUBSCRIBE / BILLING

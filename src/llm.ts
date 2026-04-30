@@ -89,3 +89,76 @@ async function streamGeminiFlash(
 
   return { stream, usage: usagePromise };
 }
+
+
+// ════════════════════════════════════════════════════════════════
+// IMAGE GENERATION
+// ────────────────────────────────────────────────────────────────
+// Uses Google's REST API directly (the v0.21 SDK doesn't expose
+// responseModalities). Tries Gemini's image-capable model variants
+// in order until one succeeds. Returns a base64 data URL ready for
+// inline render.
+// ════════════════════════════════════════════════════════════════
+
+const IMAGE_MODELS = [
+  'gemini-2.5-flash-image',
+  'gemini-2.0-flash-preview-image-generation',
+  'gemini-2.0-flash-exp-image-generation',
+];
+
+export async function generateImage(params: {
+  prompt: string;
+  personaName?: string;
+  personaStyleHint?: string;
+}): Promise<{ dataUrl: string; mimeType: string; bytes: number; model: string; caption: string | null }> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error('GEMINI_API_KEY not configured');
+
+  // Optionally augment the prompt with a persona-specific style hint.
+  const augmentedPrompt = params.personaStyleHint
+    ? `${params.prompt}\n\nStyle: ${params.personaStyleHint}`
+    : params.prompt;
+
+  let lastErr: any = new Error('No image models tried');
+  for (const model of IMAGE_MODELS) {
+    try {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: augmentedPrompt }] }],
+          generationConfig: {
+            responseModalities: ['IMAGE', 'TEXT'],
+          },
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        lastErr = new Error(`${model}: HTTP ${res.status} ${text.slice(0, 200)}`);
+        continue;
+      }
+      const data: any = await res.json();
+      const parts: any[] = data.candidates?.[0]?.content?.parts || [];
+      const imagePart = parts.find(p => p.inlineData?.mimeType?.startsWith?.('image/'));
+      if (!imagePart) {
+        lastErr = new Error(`${model}: no image in response`);
+        continue;
+      }
+      const mimeType = imagePart.inlineData.mimeType as string;
+      const base64 = imagePart.inlineData.data as string;
+      const textPart = parts.find(p => typeof p.text === 'string' && p.text.trim().length > 0);
+      const caption = textPart ? (textPart.text as string).trim() : null;
+      return {
+        dataUrl: `data:${mimeType};base64,${base64}`,
+        mimeType,
+        bytes: Math.ceil(base64.length * 0.75),
+        model,
+        caption,
+      };
+    } catch (err: any) {
+      lastErr = err;
+    }
+  }
+  throw new Error(`All image models failed. Last error: ${lastErr?.message || lastErr}`);
+}
