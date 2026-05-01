@@ -650,10 +650,35 @@ app.post('/api/chat', chatLimit, async (req, res) => {
   }
 });
 
-// Defense-in-depth: cap total daily image generations across ALL users.
-// Each image is ~$0.04. DAILY_IMAGE_CAP * $0.04 = max daily Gemini image spend.
+// Image generation tier limits (post-2026-04-29).
+//
+//   FREE_IMAGES_PER_DAY     — non-subscribers get this many per UTC day before
+//                              the upgrade prompt. Default 3.
+//   SUB_IMAGES_PER_MONTH    — subscribers get this many per UTC month included.
+//                              Default 100.
+//   DAILY_IMAGE_CAP         — global circuit breaker, last line of defense
+//                              against runaway Gemini billing. Default 500/day
+//                              (≈$20/day at $0.04/image).
+const FREE_IMAGES_PER_DAY = Number(process.env.FREE_IMAGES_PER_DAY || 3);
+const SUB_IMAGES_PER_MONTH = Number(process.env.SUB_IMAGES_PER_MONTH || 100);
 const DAILY_IMAGE_CAP = Number(process.env.DAILY_IMAGE_CAP || 500);
 const TRIAL_MESSAGE_CAP = 10;
+
+// Pricing payload returned to the client when a free user hits the daily cap.
+// Frontend renders this as the upgrade modal — keep keys stable; client reads them.
+const IMAGE_UPGRADE_OFFER = {
+  product: 'My Very Own',
+  tagline: 'Unlimited chat with all 20 voices. 100 images a month.',
+  priceMonthly: 999,                  // $9.99/mo in cents
+  priceAnnual: 7188,                  // $71.88/yr in cents (~$5.99/mo, 40% off)
+  imageQuotaMonthly: SUB_IMAGES_PER_MONTH,
+  features: [
+    'Unlimited chat with every persona',
+    `${SUB_IMAGES_PER_MONTH} image generations every month`,
+    'Private threads — your conversations stay yours',
+    'Cancel anytime, no questions',
+  ],
+};
 
 app.post('/api/image/generate', chatLimit, async (req, res) => {
   const { sessionId, persona: bodyPersona, prompt } = req.body || {};
@@ -676,15 +701,15 @@ app.post('/api/image/generate', chatLimit, async (req, res) => {
   const now = Date.now();
   const isAuthed = !!session.user_id;
   const isSubscribed = isAuthed && hasActiveSubscription(session.user_id!, personaId);
+  const userOrSession = session.user_id || sessionId;
 
   // Hard gate: if the trial session has expired AND the user isn't authed, refuse.
   if (!isAuthed && session.expires_at < now) {
     return res.status(402).json({ error: 'Session expired', code: 'SESSION_EXPIRED', requiresAuth: true });
   }
 
-  // FIX (security harden 2026-04-29): apply trial message cap to ALL non-subscribed
-  // users — anon AND authed-unsubscribed. Without this, anon users could generate
-  // unlimited images at ~$0.04 each. Cost-amplification attack vector.
+  // Defense-in-depth: trial message cap (chat + image combined). Stays at 10
+  // for non-subscribers across the full trial window.
   if (!isSubscribed && session.message_count >= TRIAL_MESSAGE_CAP) {
     return res.status(402).json({
       error: 'Trial limit reached',
@@ -693,15 +718,52 @@ app.post('/api/image/generate', chatLimit, async (req, res) => {
     });
   }
 
-  // Daily global image budget — last-resort circuit breaker. Even if rate
-  // limits / per-user caps fail, this caps total daily Gemini spend.
+  // ─── Tiered image quota ───
   const dayStart = now - (now % 86_400_000);
+  // Month start: UTC. 30-day rolling would be nicer but cheaper this way.
+  const d = new Date(now);
+  const monthStart = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+
+  if (isSubscribed) {
+    // Subscribers: monthly quota
+    const myImagesThisMonth = (db.prepare(`
+      SELECT COUNT(*) as n FROM usage
+      WHERE session_or_user_id = ? AND model LIKE 'gemini%image%' AND created_at >= ?
+    `).get(userOrSession, monthStart) as { n: number }).n;
+    if (myImagesThisMonth >= SUB_IMAGES_PER_MONTH) {
+      return res.status(402).json({
+        error: `You've reached this month's ${SUB_IMAGES_PER_MONTH}-image quota.`,
+        code: 'SUB_MONTHLY_QUOTA_REACHED',
+        usedThisMonth: myImagesThisMonth,
+        quota: SUB_IMAGES_PER_MONTH,
+        resetsOn: new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1)).toISOString(),
+      });
+    }
+  } else {
+    // Free / non-subscribers: 3 per UTC day, then upgrade prompt
+    const myImagesToday = (db.prepare(`
+      SELECT COUNT(*) as n FROM usage
+      WHERE session_or_user_id = ? AND model LIKE 'gemini%image%' AND created_at >= ?
+    `).get(userOrSession, dayStart) as { n: number }).n;
+    if (myImagesToday >= FREE_IMAGES_PER_DAY) {
+      return res.status(402).json({
+        error: `You've used your ${FREE_IMAGES_PER_DAY} free images today. Resets at midnight UTC.`,
+        code: 'IMAGE_LIMIT_DAILY',
+        usedToday: myImagesToday,
+        freeQuota: FREE_IMAGES_PER_DAY,
+        resetsOn: new Date(dayStart + 86_400_000).toISOString(),
+        upgrade: IMAGE_UPGRADE_OFFER,
+      });
+    }
+  }
+
+  // Daily global circuit breaker — last line of defense against runaway billing.
   const imagesToday = (db.prepare(`
     SELECT COUNT(*) as n FROM usage
     WHERE model LIKE 'gemini%image%' AND created_at >= ?
   `).get(dayStart) as { n: number }).n;
   if (imagesToday >= DAILY_IMAGE_CAP) {
-    console.warn(`[image] daily cap hit (${imagesToday}/${DAILY_IMAGE_CAP})`);
+    console.warn(`[image] global daily cap hit (${imagesToday}/${DAILY_IMAGE_CAP})`);
     return res.status(503).json({
       error: 'Image generation temporarily paused. Try again tomorrow.',
       code: 'DAILY_CAP_REACHED',
