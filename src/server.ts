@@ -320,9 +320,19 @@ app.post('/api/content/:id/post-now', async (req, res) => {
     if (!twitterConfigured()) {
       return res.status(503).json({ error: 'X API not configured — set X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_TOKEN_SECRET' });
     }
-    const item = (await import('./db/index.js')).db.prepare(`SELECT id, body, status FROM content_queue WHERE id = ?`).get(id) as any;
+    const item = (await import('./db/index.js')).db.prepare(`SELECT id, body, status, format FROM content_queue WHERE id = ?`).get(id) as any;
     if (!item) return res.status(404).json({ error: 'not found' });
     if (item.status === 'posted') return res.status(400).json({ error: 'already posted' });
+    // Pre-check: X tweets are capped at 280 chars. thread_starter / mini_essay
+    // formats often exceed this and need to be drafted as a thread by the
+    // operator. Reject upstream with a clear message instead of letting the X API fail.
+    if (typeof item.body === 'string' && item.body.length > 280) {
+      return res.status(400).json({
+        error: `Post is ${item.body.length} chars — over the 280 X limit. Use 'Open in X' to draft this as a thread instead.`,
+        code: 'TOO_LONG',
+        chars: item.body.length,
+      });
+    }
     const result = await postTweet(item.body);
     if (!result.ok) return res.status(502).json({ error: result.error || 'post failed' });
     (await import('./db/index.js')).db.prepare(`
@@ -356,7 +366,13 @@ app.get('/api/content/scheduler-status', (req, res) => {
 const TRIAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;   // 7 days
 
 app.post('/api/session', (req, res) => {
-  const { name, persona, ageVerified } = req.body || {};
+  const { name: rawName, persona, ageVerified } = req.body || {};
+  // Clamp name to 80 chars + must be string. Defends against giant payloads
+  // and DB bloat. Empty/missing → null.
+  const name: string | null =
+    typeof rawName === 'string' && rawName.trim().length > 0
+      ? rawName.trim().slice(0, 80)
+      : null;
   const personaObj = persona ? getPersona(persona) : null;
   if (!persona || !personaObj) {
     return res.status(400).json({ error: 'Invalid persona' });
@@ -634,6 +650,11 @@ app.post('/api/chat', chatLimit, async (req, res) => {
   }
 });
 
+// Defense-in-depth: cap total daily image generations across ALL users.
+// Each image is ~$0.04. DAILY_IMAGE_CAP * $0.04 = max daily Gemini image spend.
+const DAILY_IMAGE_CAP = Number(process.env.DAILY_IMAGE_CAP || 500);
+const TRIAL_MESSAGE_CAP = 10;
+
 app.post('/api/image/generate', chatLimit, async (req, res) => {
   const { sessionId, persona: bodyPersona, prompt } = req.body || {};
   if (!sessionId || typeof prompt !== 'string' || prompt.trim().length === 0) {
@@ -643,7 +664,6 @@ app.post('/api/image/generate', chatLimit, async (req, res) => {
     return res.status(400).json({ error: 'prompt too long (max 1000 chars)' });
   }
 
-  // Same session/auth/limit gate as /api/chat
   const session = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId) as Session | undefined;
   if (!session) return res.status(404).json({ error: 'Session not found' });
 
@@ -656,13 +676,36 @@ app.post('/api/image/generate', chatLimit, async (req, res) => {
   const now = Date.now();
   const isAuthed = !!session.user_id;
   const isSubscribed = isAuthed && hasActiveSubscription(session.user_id!, personaId);
+
+  // Hard gate: if the trial session has expired AND the user isn't authed, refuse.
   if (!isAuthed && session.expires_at < now) {
     return res.status(402).json({ error: 'Session expired', code: 'SESSION_EXPIRED', requiresAuth: true });
   }
-  if (isAuthed && !isSubscribed) {
-    if (session.message_count >= 10) {
-      return res.status(402).json({ error: 'Trial limit reached', code: 'NEEDS_SUBSCRIPTION', persona: personaId });
-    }
+
+  // FIX (security harden 2026-04-29): apply trial message cap to ALL non-subscribed
+  // users — anon AND authed-unsubscribed. Without this, anon users could generate
+  // unlimited images at ~$0.04 each. Cost-amplification attack vector.
+  if (!isSubscribed && session.message_count >= TRIAL_MESSAGE_CAP) {
+    return res.status(402).json({
+      error: 'Trial limit reached',
+      code: 'NEEDS_SUBSCRIPTION',
+      persona: personaId,
+    });
+  }
+
+  // Daily global image budget — last-resort circuit breaker. Even if rate
+  // limits / per-user caps fail, this caps total daily Gemini spend.
+  const dayStart = now - (now % 86_400_000);
+  const imagesToday = (db.prepare(`
+    SELECT COUNT(*) as n FROM usage
+    WHERE model LIKE 'gemini%image%' AND created_at >= ?
+  `).get(dayStart) as { n: number }).n;
+  if (imagesToday >= DAILY_IMAGE_CAP) {
+    console.warn(`[image] daily cap hit (${imagesToday}/${DAILY_IMAGE_CAP})`);
+    return res.status(503).json({
+      error: 'Image generation temporarily paused. Try again tomorrow.',
+      code: 'DAILY_CAP_REACHED',
+    });
   }
 
   try {
@@ -672,8 +715,20 @@ app.post('/api/image/generate', chatLimit, async (req, res) => {
       personaName: persona.name,
       personaStyleHint: styleHint,
     });
-    // Each image generation counts as a message turn for trial accounting.
+    // Track in sessions (trial accounting) AND usage (daily budget tracking).
     db.prepare('UPDATE sessions SET message_count = message_count + 1 WHERE id = ?').run(sessionId);
+    db.prepare(`
+      INSERT INTO usage (session_or_user_id, persona, model, input_tokens, output_tokens, cost_usd_millis, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      session.user_id || sessionId,
+      personaId,
+      img.model,
+      Math.ceil(prompt.trim().length / 4),  // rough input estimate
+      0,                                     // image gen has no output tokens
+      40,                                    // ~$0.04 = 40 millis
+      Date.now()
+    );
     res.json({
       ok: true,
       dataUrl: img.dataUrl,
@@ -684,8 +739,9 @@ app.post('/api/image/generate', chatLimit, async (req, res) => {
       messageCount: session.message_count + 1,
     });
   } catch (err: any) {
-    console.error('[image] generation failed', err);
-    res.status(502).json({ error: err?.message || 'Image generation failed' });
+    // Log full error internally; return generic to client (don't leak Gemini-side details).
+    console.error('[image] generation failed', err?.message || err);
+    res.status(502).json({ error: 'Image generation failed', code: 'GEN_FAILED' });
   }
 });
 
