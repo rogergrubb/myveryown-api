@@ -176,6 +176,8 @@ export function initSchema() {
   `);
   // Idempotent ALTER for already-deployed databases. ignore "duplicate column" errors.
   try { db.exec(`ALTER TABLE subscriptions ADD COLUMN cancelled_at INTEGER`); } catch { /* column already exists */ }
+  try { db.exec(`ALTER TABLE content_queue ADD COLUMN posted_pin_id TEXT`); } catch { /* column already exists */ }
+  try { db.exec(`ALTER TABLE content_queue ADD COLUMN posted_thread_id TEXT`); } catch { /* column already exists */ }
   console.log('[db] schema initialized at', dbPath);
 }
 

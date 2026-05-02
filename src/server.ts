@@ -14,6 +14,8 @@ import {
   scheduleItem, unscheduleItem, autoScheduleNext, startScheduler,
 } from './scheduler.js';
 import { isConfigured as twitterConfigured, postTweet } from './twitter.js';
+import { isConfigured as pinterestConfigured, postPin, listBoards } from './pinterest.js';
+import { isConfigured as threadsConfigured, postThread } from './threads.js';
 import {
   signSession, verifySession, sendMagicLink, consumeMagicToken,
   verifyGoogleIdToken, verifyAppleIdToken, findOrCreateUser,
@@ -344,14 +346,110 @@ app.post('/api/content/:id/post-now', async (req, res) => {
   } catch (err: any) { res.status(500).json({ error: err?.message || 'failed' }); }
 });
 
+// ─── Pinterest post-now ───
+app.post('/api/content/:id/post-now-pinterest', async (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const id = Number(req.params.id);
+    if (!pinterestConfigured()) {
+      return res.status(503).json({ error: 'Pinterest API not configured. Set PINTEREST_ACCESS_TOKEN + PINTEREST_DEFAULT_BOARD_ID.' });
+    }
+    const item = (await import('./db/index.js')).db.prepare(
+      `SELECT id, body, hook, persona, suggested_image, status FROM content_queue WHERE id = ?`
+    ).get(id) as any;
+    if (!item) return res.status(404).json({ error: 'not found' });
+    if (item.status === 'posted') return res.status(400).json({ error: 'already posted' });
+
+    // Build pin from queue item. Use the persona's OG card as the image.
+    // Title: first sentence of body (or hook), capped at 100 chars
+    // Description: full body, capped at 500
+    const persona = (item.persona || '').split('+')[0]; // primary persona for switch posts
+    const imageUrl = persona
+      ? `https://myveryown.page/og/${persona}.png`
+      : 'https://myveryown.page/og/kpop.png';
+    const titleSrc = item.hook || (item.body || '').split(/[.!?]/)[0] || 'My Very Own';
+    const title = titleSrc.slice(0, 100);
+    const description = (item.body || '').slice(0, 500);
+    const link = `https://myveryown.page/start/${persona || 'kpop'}?utm_source=pinterest&utm_medium=organic`;
+
+    const result = await postPin({ title, description, link, imageUrl, altText: title });
+    if (!result.ok) return res.status(502).json({ error: result.error });
+
+    (await import('./db/index.js')).db.prepare(`
+      UPDATE content_queue
+      SET status = 'posted', posted_at = ?, posted_url = ?, posted_pin_id = ?, auto_posted = 1
+      WHERE id = ?
+    `).run(Date.now(), result.url, result.pin_id, id);
+
+    res.json({ ok: true, pin_id: result.pin_id, url: result.url });
+  } catch (err: any) {
+    console.error('[pinterest] post-now', err?.message || err);
+    res.status(500).json({ error: 'post failed' });
+  }
+});
+
+// ─── Threads post-now ───
+app.post('/api/content/:id/post-now-threads', async (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const id = Number(req.params.id);
+    if (!threadsConfigured()) {
+      return res.status(503).json({ error: 'Threads API not configured. Set THREADS_ACCESS_TOKEN + THREADS_USER_ID.' });
+    }
+    const item = (await import('./db/index.js')).db.prepare(
+      `SELECT id, body, status FROM content_queue WHERE id = ?`
+    ).get(id) as any;
+    if (!item) return res.status(404).json({ error: 'not found' });
+    if (item.status === 'posted') return res.status(400).json({ error: 'already posted' });
+    if (typeof item.body === 'string' && item.body.length > 500) {
+      return res.status(400).json({
+        error: `Post is ${item.body.length} chars — over the 500 Threads limit. Trim or use Threads' own thread-format manually.`,
+        code: 'TOO_LONG',
+        chars: item.body.length,
+      });
+    }
+    const result = await postThread(item.body);
+    if (!result.ok) return res.status(502).json({ error: result.error });
+
+    (await import('./db/index.js')).db.prepare(`
+      UPDATE content_queue
+      SET status = 'posted', posted_at = ?, posted_url = ?, posted_thread_id = ?, auto_posted = 1
+      WHERE id = ?
+    `).run(Date.now(), result.url, result.thread_id, id);
+
+    res.json({ ok: true, thread_id: result.thread_id, url: result.url });
+  } catch (err: any) {
+    console.error('[threads] post-now', err?.message || err);
+    res.status(500).json({ error: 'post failed' });
+  }
+});
+
+// ─── Pinterest board list (setup helper) ───
+app.get('/api/content/pinterest-boards', async (req, res) => {
+  if (!dashboardAuth(req, res)) return;
+  try {
+    const boards = await listBoards();
+    res.json({ boards, configured: pinterestConfigured() });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || 'failed' });
+  }
+});
+
 // ─── Scheduler config visibility ───
 app.get('/api/content/scheduler-status', (req, res) => {
   if (!dashboardAuth(req, res)) return;
   res.json({
+    // Legacy fields for backwards compat with existing dashboard
     twitter_configured: twitterConfigured(),
     auto_posting: twitterConfigured(),
     setup_url: 'https://developer.x.com/',
     required_env: ['X_API_KEY', 'X_API_SECRET', 'X_ACCESS_TOKEN', 'X_ACCESS_TOKEN_SECRET'],
+    // New per-platform status
+    platforms: {
+      x: { configured: twitterConfigured(), setup_url: 'https://developer.x.com/' },
+      pinterest: { configured: pinterestConfigured(), setup_url: 'https://developers.pinterest.com/' },
+      threads: { configured: threadsConfigured(), setup_url: 'https://developers.facebook.com/' },
+    },
   });
 });
 
